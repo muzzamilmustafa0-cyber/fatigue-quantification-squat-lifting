@@ -1,0 +1,46 @@
+# Dataset (not included)
+Data/
+data/
+*.xlsx
+*.xls
+FINAL DATA ANALYSIS FORM.xlsx
+
+# Generated outputs (reproducible from code)
+analysis/results/
+analysis/figures/
+analysis/josh_figures/
+analysis/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Templates
+*.dot
+*.dotx
+_sensors_tmp.docx
+
+# Word documents
+*.docx
+
+# Cached model files
+*.joblib
+*.pkl
+*.h5
+*.npz
+*.npy
+
+# Python environment
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
