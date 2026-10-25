@@ -25,6 +25,28 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 FATIGUE_THRESHOLD = 5   # Borg RPE >= 5 → Fatigued
 
+# EMG file name (lower-case) -> subject name in "Filled form S" (lower-case), where spellings differ.
+# Fuzzy matching previously assigned the wrong participant's labels to several files.
+EMG_TO_FORM_NAME = {
+    "arsalan": "asrsalan",
+    "asif hussain": "asif husain",
+    "ijaz beher": "ijaz behar",
+    "mohsin": "mohsin ali",
+    "mohsin javed": "mohsijaved",
+    "zohaib": "zuhaib",
+}
+# "Bizzat 4.xlsx" duplicates the 4 kg session in "Bizzat.xlsx" (identical EMG features).
+DUPLICATE_EMG_FILES = {"bizzat 4"}
+
+
+def form_subject_idx(label_df: pd.DataFrame, emg_name: str) -> int:
+    key = emg_name.lower().strip()
+    if label_df.empty or key in DUPLICATE_EMG_FILES:
+        return -1
+    fs_name = EMG_TO_FORM_NAME.get(key, key)
+    rows = label_df[label_df["Subject"].str.strip().str.lower() == fs_name]
+    return int(rows["Subject_idx"].iloc[0]) if not rows.empty else -1
+
 
 N_OBS_BLOCKS = 6   # Observations per session (6 blocks of 4 squats = 24 squats)
 
@@ -57,29 +79,6 @@ def build_emg_feature_df(emg_data: dict, label_df: pd.DataFrame,
     all_rows = []
     emg_subjects = sorted(emg_data.keys())
 
-    # Build name-matching lookup: try fuzzy match between EMG file names and form subjects
-    if not label_df.empty:
-        form_subjects = label_df["Subject"].str.strip().str.lower().unique()
-    else:
-        form_subjects = []
-
-    def _find_form_subject_idx(emg_name: str) -> int:
-        name_lower = emg_name.lower().strip()
-        for fs_name in form_subjects:
-            # Direct substring match in either direction
-            if name_lower in fs_name or fs_name in name_lower:
-                rows = label_df[label_df["Subject"].str.strip().str.lower() == fs_name]
-                if not rows.empty:
-                    return int(rows["Subject_idx"].iloc[0])
-            # Match first word (first name)
-            name_first = name_lower.split()[0] if name_lower.split() else ""
-            fs_first   = fs_name.split()[0]    if fs_name.split()   else ""
-            if name_first and name_first == fs_first:
-                rows = label_df[label_df["Subject"].str.strip().str.lower() == fs_name]
-                if not rows.empty:
-                    return int(rows["Subject_idx"].iloc[0])
-        return -1   # Not found
-
     for emg_subj_idx, subj_name in enumerate(tqdm(emg_subjects, desc="Extracting features")):
         subj_emg = emg_data[subj_name]
 
@@ -90,7 +89,10 @@ def build_emg_feature_df(emg_data: dict, label_df: pd.DataFrame,
         bmi    = float(demo_row["BMI"].iloc[0])        if not demo_row.empty else np.nan
 
         # Find matching subject in label_df
-        form_subj_idx = _find_form_subject_idx(subj_name)
+        form_subj_idx = form_subject_idx(label_df, subj_name)
+        if form_subj_idx < 0:
+            print(f"  [SKIP] {subj_name} — no exact label-form entry (or duplicate recording)")
+            continue
 
         for load_str in ["4kg", "8kg"]:
             if load_str not in subj_emg:
@@ -131,22 +133,14 @@ def build_emg_feature_df(emg_data: dict, label_df: pd.DataFrame,
                 }
                 row.update(feats)
 
-                # Labels from analysis form (preferred) or heuristic fallback
-                if not form_rows.empty and block_idx < len(form_rows):
-                    lr = form_rows.iloc[block_idx]
-                    row["RPE"]        = float(lr["RPE"])
-                    row["RPE_Upper"]  = float(lr.get("RPE_Upper", np.nan))
-                    row["RPE_Middle"] = float(lr.get("RPE_Middle", np.nan))
-                    row["RPE_Lower"]  = float(lr.get("RPE_Lower", np.nan))
-                    row["HR"]         = float(lr.get("HR", np.nan))
-                else:
-                    # Heuristic: fatigue increases linearly; onset ~halfway (block 3)
-                    frac = block_idx / (N_OBS_BLOCKS - 1)
-                    row["RPE"]        = round(1 + frac * 7, 1)   # 1 → 8 over 6 blocks
-                    row["RPE_Upper"]  = np.nan
-                    row["RPE_Middle"] = np.nan
-                    row["RPE_Lower"]  = np.nan
-                    row["HR"]         = np.nan
+                if form_rows.empty or block_idx >= len(form_rows):
+                    continue
+                lr = form_rows.iloc[block_idx]
+                row["RPE"]        = float(lr["RPE"])
+                row["RPE_Upper"]  = float(lr.get("RPE_Upper", np.nan))
+                row["RPE_Middle"] = float(lr.get("RPE_Middle", np.nan))
+                row["RPE_Lower"]  = float(lr.get("RPE_Lower", np.nan))
+                row["HR"]         = float(lr.get("HR", np.nan))
 
                 all_rows.append(row)
 
@@ -191,6 +185,9 @@ def build_dl_dataset(emg_data: dict, label_df: pd.DataFrame) -> dict:
 
     for subj_idx, subj_name in enumerate(tqdm(subjects, desc="Building DL windows")):
         subj_emg = emg_data[subj_name]
+        form_idx = form_subject_idx(label_df, subj_name)
+        if form_idx < 0:
+            continue
 
         for load_str in ["4kg", "8kg"]:
             if load_str not in subj_emg:
@@ -208,26 +205,18 @@ def build_dl_dataset(emg_data: dict, label_df: pd.DataFrame) -> dict:
 
             # Get RPE for the full recording from the form
             form_rows = label_df[
-                (label_df["Subject_idx"] == subj_idx) &
+                (label_df["Subject_idx"] == form_idx) &
                 (label_df["Load_kg"] == load_kg)
-            ] if not label_df.empty else pd.DataFrame()
+            ].sort_values("Obs_No")
+            if form_rows.empty:
+                continue
 
             # Assign RPE to each window based on its temporal position
             for wi in range(n_win):
                 frac = wi / max(n_win - 1, 1)
-                if not form_rows.empty:
-                    # Pick the RPE at the corresponding fractional squat position
-                    n_obs = len(form_rows)
-                    obs_idx = min(int(frac * n_obs), n_obs - 1)
-                    rpe_val = float(form_rows["RPE"].iloc[obs_idx])
-                else:
-                    # Heuristic labeling
-                    if frac < 0.4:
-                        rpe_val = 3.0
-                    elif frac < 0.65:
-                        rpe_val = 5.0
-                    else:
-                        rpe_val = 7.0
+                n_obs = len(form_rows)
+                obs_idx = min(int(frac * n_obs), n_obs - 1)
+                rpe_val = float(form_rows["RPE"].iloc[obs_idx])
 
                 all_windows.append(windows[wi])
                 all_rpe.append(rpe_val)
