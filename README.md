@@ -18,7 +18,14 @@ A machine learning and deep learning pipeline for EMG-based fatigue classificati
 │   ├── deep_learning.py         # MLP, 1D-CNN, BiLSTM (TensorFlow)
 │   ├── results_tables.py        # Generate CSV summary tables
 │   ├── visualizations.py        # Publication-quality figures (300 DPI)
-│   └── requirements.txt         # Python dependencies
+│   ├── requirements.txt         # Python dependencies
+│   └── paper/                   # Fatigue analyses and figures
+│       ├── sensitivity.py           # Input configurations (absolute features, label-leakage control)
+│       ├── baseline_referenced.py   # Features referenced to each participant's first block
+│       ├── variance_split.py        # Between- vs within-participant variance and Spearman ρ with RPE
+│       ├── fig_prep.py              # sEMG preprocessing figure
+│       ├── fig_physio.py            # Physiological trends across blocks (Friedman/Wilcoxon tests)
+│       └── figures.py               # NIOSH, LOSO ROC/confusion and SHAP figures
 ├── README.md
 └── .gitignore
 ```
@@ -75,6 +82,23 @@ Steps executed:
 4. **Figures** — Generate all figures to `analysis/figures/`
 
 Results are saved to `analysis/results/` (CSV tables) and `analysis/figures/` (PNG/PDF figures).
+
+---
+
+## Fatigue Analyses and Figures
+
+After `run_all.py` has created `analysis/results/dataset_classification.csv`, run from the project root:
+
+```bash
+python analysis/paper/sensitivity.py analysis out/sens
+python analysis/paper/baseline_referenced.py analysis out/sens
+python analysis/paper/variance_split.py analysis out/sens
+python analysis/paper/fig_prep.py analysis out/figures
+python analysis/paper/fig_physio.py analysis out/figures
+python analysis/paper/figures.py analysis out/figures out/sens
+```
+
+Create the output folders first (`mkdir -p out/sens out/figures`). All evaluations use leave-one-subject-out (LOSO) cross-validation.
 
 ---
 
